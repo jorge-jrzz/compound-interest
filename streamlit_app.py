@@ -1,151 +1,98 @@
-import streamlit as st
-import pandas as pd
-import math
 from pathlib import Path
+from typing import List, Tuple
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+import pandas as pd
+import streamlit as st
+import matplotlib.pyplot as plt
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+TASA = 7.04
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+def format_money(money: float) -> str:
+    """Formatea una cantidad como moneda."""
+    return "${:,.2f} MN".format(money)
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+def format_duration(months: int) -> str:
+    """Formatea una duración en meses como años y meses."""
+    if months > 12:
+        return f'{months // 12} años y {months % 12} meses'
+    return f'{months} meses'
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+def calculate_accumulated_values(init_money: float, duration: int, monthly_rate: float) -> Tuple[List[float], List[float]]:
+    """Calcula los valores acumulados y compuestos mensualmente."""
+    accumulated_values = []
+    compounded_values = []
+    current_value = init_money
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+    for month in range(duration):
+        accumulated_values.append(init_money * (month + 1))  # Capital acumulado
+        current_value = current_value * (1 + monthly_rate)  # Interés compuesto
+        compounded_values.append(current_value)
+        current_value += init_money  # Añadir contribución mensual
+
+    return accumulated_values, compounded_values
+
+def main():
+    st.image(Path(__file__).parent/'assets/logo_banorte.png', width=450)
+    st.title('Simulación de Fondo de Inversión')
+
+    # Entrada: Capital inicial
+    init_money = st.slider(
+        label='Ingresando al fondo de inversión mensualmente:',
+        min_value=1000,
+        max_value=22346,
+        value=3350,
+        format='$ %d',
+        step=100
     )
+    st.write(f"Capital seleccionado: {format_money(init_money)}")
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    # Entrada: Duración
+    duration = st.slider(
+        label='Duración de la inversión:',
+        min_value=1,
+        max_value=36,
+        value=12,
+        format='%d meses',
+    )
+    st.write(f"Duración seleccionada: {format_duration(duration)}")
 
-    return gdp_df
+    # Cálculo del valor total acumulado
+    monthly_rate = TASA / 100 / 12  # Tasa mensual
+    accumulated_value = init_money * ((1 + monthly_rate) ** duration - 1) / monthly_rate
 
-gdp_df = get_gdp_data()
+    st.markdown(
+        f"Si usted hubiera invertido **{format_money(init_money)}** hace **{format_duration(duration)}**, "
+        f"ingresando la misma cantidad mensualmente, el monto total con ganancias sería de:"
+    )
+    st.markdown(f"<h2 style='text-align: center; color: green;'>{format_money(accumulated_value)}</h2>", unsafe_allow_html=True)
+    st.markdown('---')
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+    # Calcular valores mensuales
+    months = list(range(1, duration + 1))
+    accumulated_values, compounded_values = calculate_accumulated_values(init_money, duration, monthly_rate)
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+    # Crear DataFrame
+    data = pd.DataFrame({
+        'Mes': months,
+        'Capital acumulado (sin intereses)': accumulated_values,
+        'Valor compuesto (con intereses)': compounded_values,
+    })
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+    # Gráfica
+    fig, ax = plt.subplots()
+    ax.plot(data['Mes'], data['Valor compuesto (con intereses)'], label='Valor compuesto (con intereses)', linewidth=2, color='green')
+    ax.plot(data['Mes'], data['Capital acumulado (sin intereses)'], label='Capital acumulado (sin intereses)', linewidth=2, color='black')
+    ax.set_title('Crecimiento del Interés Compuesto')
+    ax.set_xlabel('Mes')
+    ax.set_ylabel('Valor acumulado ($)')
+    ax.legend()
 
-# Add some spacing
-''
-''
+    st.pyplot(fig)
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+    # Tabla
+    st.write('Tabla de valores:')
+    st.dataframe(data)
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+if __name__ == '__main__':
+    main()
